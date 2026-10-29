@@ -165,7 +165,7 @@ const ISSUE_ST = { new:['ใหม่','crit'], ack:['รับเรื่อ�
 const params = new URLSearchParams(location.search);
 
 let ME = null, A = null, T = null;     // me, adminData, tenantHome
-const ui = { tab: 'rooms', month: CUR, filter: 'all', slipFilter: 'pending', rejectOpen: null, panel: null };
+const ui = { tab: 'rooms', month: CUR, building: '', filter: 'all', slipFilter: 'pending', rejectOpen: null, panel: null };
 const imgCache = {};
 
 /* ---------------- helpers ---------------- */
@@ -236,7 +236,9 @@ function contractStatus(r){
   if (d <= 60) return { cls:'warn', label:`เหลือ ${d} วัน`, days:d };
   return { cls:'ok', label:`เหลือ ${Math.floor(d/30)} เดือน`, days:d };
 }
-const sortRooms = rs => rs.slice().sort((a,b) => String(a.room).localeCompare(String(b.room), 'th', { numeric:true }));
+const natCmp = (a, b) => String(a || '').localeCompare(String(b || ''), 'th', { numeric:true });
+const sortRooms = rs => rs.slice().sort((a,b) => natCmp(a.building, b.building) || natCmp(a.room, b.room));
+const buildingsOf = rs => [...new Set(rs.map(r => r.building).filter(Boolean))].sort(natCmp);
 
 /* ---------------- shared cards ---------------- */
 function slipCard(p, owner){
@@ -247,7 +249,7 @@ function slipCard(p, owner){
   return `<article class="card slip">${thumb}
     <div style="min-width:0">
       <div class="head"><h3>${owner ? `ห้อง <span class="num">${esc(p.room)}</span> · ` : ''}${esc(thMonth(p.month))}</h3><span class="pill ${st[1]}">${st[0]}</span></div>
-      <div class="meta">${owner ? `<span>${esc(r.tenantName || '—')}</span>` : ''}<span>${esc(thTime(p.submittedAt))}</span>${p.by === 'owner' ? '<span>บันทึกโดยเจ้าของหอ</span>' : ''}</div>
+      <div class="meta">${owner ? `<span>${esc((r.building ? r.building + ' · ' : '') + (r.tenantName || '—'))}</span>` : ''}<span>${esc(thTime(p.submittedAt))}</span>${p.by === 'owner' ? '<span>บันทึกโดยเจ้าของหอ</span>' : ''}</div>
       <p style="margin:6px 0 0"><span class="num" style="font-size:19px;font-weight:600">${baht(p.amount)}</span>${owner && mismatch ? `<span class="warnline"> · ไม่ตรงค่าเช่า (${baht(r.rent)})</span>` : ''}</p>
       ${p.note ? `<p class="meta" style="margin:4px 0 0">หมายเหตุ: ${esc(p.note)}</p>` : ''}
       ${p.status === 'rejected' && p.reason ? `<p class="warnline" style="margin:4px 0 0">เหตุผล: ${esc(p.reason)}</p>` : ''}
@@ -308,8 +310,9 @@ const tabBtn = (id, label, extra = '') => `<button role="tab" data-tab="${id}" a
 function roomsTab(rooms){
   if (!rooms.length) return `<div class="empty"><p>ยังไม่มีห้องในระบบ เริ่มจากเพิ่มห้องแรก</p><button class="btn pri" data-act="newRoom">+ เพิ่มห้อง</button></div>`;
   const F = { all:'ทั้งหมด', late:'ค้างชำระ', pending:'รอตรวจ', soon:'ใกล้ครบกำหนด', paid:'ชำระแล้ว', vacant:'ห้องว่าง' };
-  const shown = rooms.filter(r => { const s = payStatus(r, ui.month, A.payments).code; return ui.filter === 'all' || s === ui.filter || (ui.filter === 'late' && s === 'rejected'); });
-  return `<div class="toolbar">${monthSelect('monthSel', ui.month)}<span class="grow"></span><button class="btn pri sm" data-act="newRoom">+ เพิ่มห้อง</button></div>
+  const blds = buildingsOf(rooms); if (ui.building && !blds.includes(ui.building)) ui.building = '';
+  const shown = rooms.filter(r => { if (ui.building && r.building !== ui.building) return false; const s = payStatus(r, ui.month, A.payments).code; return ui.filter === 'all' || s === ui.filter || (ui.filter === 'late' && s === 'rejected'); });
+  return `<div class="toolbar">${monthSelect('monthSel', ui.month)}${blds.length ? `<select class="in inline" id="bldSel" aria-label="เลือกตึก"><option value="">ทุกตึก</option>${blds.map(b => `<option value="${esc(b)}" ${b === ui.building ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>` : ''}<span class="grow"></span><button class="btn pri sm" data-act="newRoom">+ เพิ่มห้อง</button></div>
     <div class="chips" style="margin-bottom:12px">${Object.entries(F).map(([k,l]) => `<button class="chip" data-filter="${k}" aria-pressed="${ui.filter === k}">${l}</button>`).join('')}</div>
     ${shown.length ? `<div class="grid">${shown.map(plate).join('')}</div>` : `<div class="empty">ไม่มีห้องในกลุ่มนี้</div>`}`;
 }
@@ -317,7 +320,7 @@ function plate(r){
   const s = payStatus(r, ui.month, A.payments), c = contractStatus(r);
   const stripe = { ok:'var(--ok)', info:'var(--info)', warn:'var(--warn)', crit:'var(--crit)', muted:'transparent' }[s.cls];
   return `<button class="plate" data-room="${esc(r.room)}" style="--stripe:${stripe}">
-    <div class="row1"><div class="no">${esc(r.room)}<small>ชั้น ${esc(r.floor || '—')}</small></div><span class="pill ${s.cls}">${esc(s.label)}</span></div>
+    <div class="row1"><div class="no">${esc(r.room)}<small>${r.building ? esc(r.building) + ' · ' : ''}ชั้น ${esc(r.floor || '—')}</small></div><span class="pill ${s.cls}">${esc(s.label)}</span></div>
     <div class="who ${r.tenantName ? '' : 'vacant'}">${esc(r.tenantName || 'ยังไม่มีผู้เช่า')} ${r.hasLine ? '<span class="line-ok">● LINE</span>' : ''}</div>
     <dl><dt>ค่าเช่า</dt><dd class="num">${baht(r.rent)}</dd>
     ${r.tenantName ? `<dt>เก็บเงิน</dt><dd>${esc(thDate(fmtISO(dueDate(r, ui.month))))}</dd><dt>สัญญา</dt><dd><span class="pill sm ${c.cls}">${esc(c.label)}</span></dd>` : ''}</dl>
@@ -368,7 +371,7 @@ async function showImg(fileId, btn){
 }
 function inviteText(r){
   const link = `${A.liffUrl}${A.liffUrl.includes('?') ? '&' : '?'}view=register&room=${encodeURIComponent(r.room)}&code=${encodeURIComponent(r.inviteCode)}`;
-  return `ลงทะเบียนห้อง ${r.room}${A.dormName ? ' ' + A.dormName : ''} ผ่าน LINE\nกดลิงก์นี้แล้วกด "ลงทะเบียน":\n${link}\n\n(เลขห้อง ${r.room} · รหัส ${r.inviteCode})`;
+  return `ลงทะเบียน${r.building ? ' ' + r.building : ''} ห้อง ${r.room}${A.dormName ? ' ' + A.dormName : ''} ผ่าน LINE\nกดลิงก์นี้แล้วกด "ลงทะเบียน":\n${link}\n\n(เลขห้อง ${r.room} · รหัส ${r.inviteCode})`;
 }
 function openRoom(no){
   openPanel(`<div id="pDyn"></div>`, () => {
@@ -376,7 +379,7 @@ function openRoom(no){
     const s = payStatus(r, ui.month, A.payments), c = contractStatus(r);
     const pays = A.payments.filter(p => p.room === no).sort((a,b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
     const iss = A.issues.filter(i => i.room === no);
-    $('#pDyn').innerHTML = `<h2 style="font-size:24px">ห้อง <span class="num">${esc(no)}</span></h2>
+    $('#pDyn').innerHTML = `<h2 style="font-size:24px">ห้อง <span class="num">${esc(no)}</span>${r.building ? `<small style="font-size:14px;font-weight:400;color:var(--muted)"> · ${esc(r.building)}</small>` : ''}</h2>
       <p class="meta" style="margin:2px 0 12px">${esc(r.tenantName || 'ห้องว่าง')}${r.phone ? ` · <span class="num" style="user-select:all">${esc(r.phone)}</span>` : ''}</p>
       <div class="actions" style="margin:0 0 12px"><button class="btn sm" data-act="editRoom" data-no="${esc(no)}">แก้ไขข้อมูล/สัญญา</button>
         ${r.tenantName ? `<button class="btn pri sm" data-act="recordPay" data-no="${esc(no)}">บันทึกการชำระ</button>` : ''}
@@ -414,8 +417,10 @@ function openRoomForm(no){
   const r = no ? A.rooms.find(x => x.room === no) : { dueDay: 5 };
   openPanel(`<h2 style="font-size:22px">${no ? `แก้ไขห้อง ${esc(no)}` : 'เพิ่มห้องใหม่'}</h2>
     <form class="form" id="roomForm" style="margin-top:14px">
+      <label>ตึก / อาคาร<input class="in" id="rfBuilding" list="bldList" maxlength="40" placeholder="เช่น ตึก A (เว้นว่างได้ถ้ามีตึกเดียว)" value="${esc(r.building || '')}"><datalist id="bldList">${buildingsOf(A.rooms).map(b => `<option value="${esc(b)}">`).join('')}</datalist></label>
       <div class="two"><label>เลขห้อง<input class="in num" id="rfNo" required value="${esc(r.room || '')}" ${no ? 'readonly' : ''} maxlength="20"></label>
       <label>ชั้น<input class="in" id="rfFloor" value="${esc(r.floor || '')}"></label></div>
+      ${no ? '' : '<p class="meta" style="margin:-4px 0 0">เลขห้องต้องไม่ซ้ำกันทั้งหอ ถ้าหลายตึกเลขซ้ำกัน ให้ใส่ตัวอักษรนำหน้า เช่น A101 / B101</p>'}
       <label>ชื่อผู้เช่า (เว้นว่าง = ห้องว่าง)<input class="in" id="rfTenant" value="${esc(r.tenantName || '')}"></label>
       <label>เบอร์โทร<input class="in num" id="rfPhone" inputmode="tel" value="${esc(r.phone || '')}"></label>
       <div class="two"><label>ค่าเช่า/เดือน (บาท)<input class="in num" id="rfRent" type="number" min="0" inputmode="numeric" required value="${esc(r.rent ?? '')}"></label>
@@ -429,7 +434,7 @@ function openRoomForm(no){
   $('#roomForm').onsubmit = e => { e.preventDefault(); const btn = e.target.querySelector('[type=submit]');
     const room = $('#rfNo').value.trim();
     busy(btn, async () => {
-      await api('saveRoom', { isNew: !no, original: no, room, floor: $('#rfFloor').value, tenantName: $('#rfTenant').value, phone: $('#rfPhone').value, rent: $('#rfRent').value, dueDay: $('#rfDue').value, contractStart: $('#rfStart').value, contractEnd: $('#rfEnd').value, deposit: $('#rfDeposit').value, note: $('#rfNote').value });
+      await api('saveRoom', { isNew: !no, original: no, room, building: $('#rfBuilding').value, floor: $('#rfFloor').value, tenantName: $('#rfTenant').value, phone: $('#rfPhone').value, rent: $('#rfRent').value, dueDay: $('#rfDue').value, contractStart: $('#rfStart').value, contractEnd: $('#rfEnd').value, deposit: $('#rfDeposit').value, note: $('#rfNote').value });
       toast('บันทึกห้อง ' + room + ' แล้ว'); await loadAdmin(); openRoom(room);
     });
   };
@@ -499,7 +504,7 @@ function renderTenant(){
     };
   }
   const s = payStatus(r, CUR, T.payments), c = contractStatus(r), due = dueDate(r, CUR);
-  $('#tStatus').innerHTML = `<div class="head"><h2 style="font-size:22px">ห้อง <span class="num">${esc(r.room)}</span></h2><span class="meta">${esc(r.tenantName || ME.name)}</span></div>
+  $('#tStatus').innerHTML = `<div class="head"><h2 style="font-size:22px">${r.building ? `<small style="font-size:14px;font-weight:400;color:var(--muted)">${esc(r.building)} </small>` : ''}ห้อง <span class="num">${esc(r.room)}</span></h2><span class="meta">${esc(r.tenantName || ME.name)}</span></div>
     <div class="bigstatus"><span class="meta">ค่าเช่า ${esc(thMonth(CUR))}</span><span class="pill ${s.cls}">${esc(s.label)}</span>
       <span><span class="num" style="font-size:21px;font-weight:600">${baht(r.rent)}</span> · กำหนดชำระ ${esc(thDate(fmtISO(due)))}</span></div>
     <dl class="info-list"><dt>เก็บเงินทุก</dt><dd>วันที่ ${esc(r.dueDay)} ของเดือน</dd>
@@ -512,13 +517,23 @@ function renderTenant(){
 }
 
 /* ================= ONBOARDING ================= */
-function renderRegister(){
+async function renderRegister(skipOwner){
   const room = params.get('room') || '', code = params.get('code') || '';
+  if (ME.needsOwnerSetup && !room && skipOwner !== true) return renderOwnerClaim();
+  let L = []; try { L = await api('listRooms'); } catch (e) { L = []; }
+  const found = L.find(g => g.rooms.includes(room));
+  const textMode = !L.length || (room && !found);
+  const cur = found || (L.length === 1 ? L[0] : null);
+  const roomOpts = g => '<option value="">เลือกห้อง</option>' + (g ? g.rooms.map(x => `<option value="${esc(x)}" ${x === room ? 'selected' : ''}>${esc(x)}</option>`).join('') : '');
+  const roomField = textMode
+    ? `<label>เลขห้อง<input class="in num" id="rgRoom" required value="${esc(room)}" autocomplete="off"></label>`
+    : (L.length > 1 || L[0].building ? `<label>ตึก<select class="in" id="rgBuilding" required><option value="">เลือกตึก</option>${L.map((g, i) => `<option value="${i}" ${g === cur ? 'selected' : ''}>${esc(g.building || 'ไม่ระบุตึก')}</option>`).join('')}</select></label>` : '')
+      + `<label>ห้อง<select class="in num" id="rgRoom" required ${cur ? '' : 'disabled'}>${roomOpts(cur)}</select></label>`;
   $('#main').innerHTML = `<div class="center">
     <h2 style="font-size:22px">ลงทะเบียนห้องพัก</h2>
-    <p style="color:var(--muted)">สวัสดี ${esc(ME.name || '')} ใส่เลขห้องและรหัสที่ได้รับจากเจ้าของหอ</p>
+    <p style="color:var(--muted)">สวัสดี ${esc(ME.name || '')} เลือกตึก/ห้อง และใส่รหัสที่ได้รับจากเจ้าของหอ</p>
     <form class="form card" id="regForm">
-      <label>เลขห้อง<input class="in num" id="rgRoom" required value="${esc(room)}" autocomplete="off"></label>
+      ${roomField}
       <label>รหัสลงทะเบียน<input class="in num" id="rgCode" required value="${esc(code)}" autocomplete="off" style="text-transform:uppercase;letter-spacing:.1em"></label>
       <button class="btn pri block" type="submit">ลงทะเบียน</button>
     </form>
@@ -527,8 +542,8 @@ function renderRegister(){
   $('#regForm').onsubmit = e => { e.preventDefault(); const btn = e.target.querySelector('[type=submit]');
     busy(btn, async () => { await api('register', { room: $('#rgRoom').value, code: $('#rgCode').value }); toast('ลงทะเบียนสำเร็จ'); await start(); });
   };
+  const bs = $('#rgBuilding'); if (bs) bs.onchange = () => { const rs = $('#rgRoom'); rs.innerHTML = roomOpts(L[bs.value]); rs.disabled = !L[bs.value]; };
   $('#iAmOwner').onclick = renderOwnerClaim;
-  if (ME.needsOwnerSetup && !room) renderOwnerClaim();
 }
 function renderOwnerClaim(){
   $('#main').innerHTML = `<div class="center">
@@ -542,7 +557,7 @@ function renderOwnerClaim(){
   $('#ownForm').onsubmit = e => { e.preventDefault(); const btn = e.target.querySelector('[type=submit]');
     busy(btn, async () => { await api('claimAdmin', { code: $('#owCode').value }); toast('ตั้งเป็นเจ้าของหอแล้ว'); await start(); });
   };
-  $('#back').onclick = renderRegister;
+  $('#back').onclick = () => renderRegister(true);
 }
 function renderError(msg){
   $('#main').innerHTML = `<div class="center"><h2 style="font-size:20px">เปิดแอปไม่สำเร็จ</h2><p style="color:var(--muted)">${esc(msg)}</p><button class="btn pri" id="retry">ลองใหม่</button></div>`;
@@ -575,7 +590,7 @@ document.addEventListener('click', e => {
   if (d.issue) { const reply = document.getElementById('reply-' + d.issue)?.value;
     return busy(t, async () => { await api('setIssueStatus', { id: d.issue, status: d.st, reply }); toast('อัปเดตเป็น "' + ISSUE_ST[d.st][0] + '" และแจ้งผู้เช่าแล้ว'); await loadAdmin(); }); }
 });
-document.addEventListener('change', e => { if (e.target.id === 'monthSel') { ui.month = e.target.value; renderAdmin(); } });
+document.addEventListener('change', e => { if (e.target.id === 'monthSel') { ui.month = e.target.value; renderAdmin(); } if (e.target.id === 'bldSel') { ui.building = e.target.value; renderAdmin(); } });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { const im = document.querySelector('.ov.img'); if (im) im.remove(); else closePanel(); } });
 $('#refresh').onclick = () => busy($('#refresh'), async () => { if (ME && ME.isAdmin) await loadAdmin(); else if (T) await loadTenant(); toast('อัปเดตแล้ว'); });
 let lastHidden = 0;
@@ -596,7 +611,7 @@ async function start(){
     return loadAdmin();
   }
   if (ME.room) {
-    $('#sub').textContent = 'ห้อง ' + ME.room.room;
+    $('#sub').textContent = (ME.room.building ? ME.room.building + ' · ' : '') + 'ห้อง ' + ME.room.room;
     await loadTenant();
     const target = view === 'pay' ? '#paySec' : view === 'issue' ? '#issueSec' : null;
     if (target) setTimeout(() => $(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
