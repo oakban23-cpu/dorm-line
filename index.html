@@ -80,6 +80,15 @@ textarea.in{resize:vertical;min-height:72px}
 .pill.ok{background:var(--ok-bg);color:var(--ok)} .pill.info{background:var(--info-bg);color:var(--info)}
 .pill.warn{background:var(--warn-bg);color:var(--warn)} .pill.crit{background:var(--crit-bg);color:var(--crit)}
 .pill.muted{background:var(--sunk);color:var(--muted)}
+.bill{display:grid;grid-template-columns:1fr auto;gap:5px 0;margin:8px 0 0}
+.bill dt{color:var(--muted)} .bill dt small{display:block;font-size:12px} .bill dd{margin:0;text-align:right;padding-left:14px}
+.bill .tot{border-top:1px solid var(--line);padding-top:7px;margin-top:2px;color:var(--ink);font-weight:700} .bill dd.tot{font-size:18px}
+.bill .fee{color:var(--crit)}
+.billrow{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;cursor:pointer}
+.itemrow{display:grid;grid-template-columns:1fr 104px auto;gap:6px;margin-bottom:6px}
+.bigtotal{display:flex;justify-content:space-between;align-items:baseline;background:var(--sunk);border-radius:var(--r);padding:10px 14px}
+.bigtotal b{font-size:22px}
+details.card{padding:10px 14px} details.card summary{cursor:pointer}
 .pill.vac{background:transparent;color:var(--brand);box-shadow:inset 0 0 0 1px currentColor}
 .plate.vacant{background:transparent;border-style:dashed}
 .pill.sm{font-size:11.5px;padding:0 8px}
@@ -160,7 +169,7 @@ const fmtISO = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate()
 const thMonth = k => { const [y,m] = k.split('-').map(Number); return new Date(y, m-1, 1).toLocaleDateString('th-TH', {month:'long', year:'numeric'}); };
 const thDate = v => v ? new Date(v.length === 10 ? v + 'T00:00:00' : v).toLocaleDateString('th-TH', {day:'numeric', month:'short', year:'numeric'}) : '—';
 const thTime = v => v ? new Date(v).toLocaleString('th-TH', {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
-const baht = n => '฿' + Number(n || 0).toLocaleString('th-TH');
+const baht = n => '฿' + Number(n || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
 const parseD = s => s ? new Date(s + 'T00:00:00') : null;
 const months = (() => { const a = []; for (let i = 1; i >= -6; i--) a.push(monthKey(new Date(today.getFullYear(), today.getMonth() + i, 1))); return a; })();
 const ISSUE_CATS = ['ไฟฟ้า','ประปา','แอร์','อินเทอร์เน็ต','ประตู/กุญแจ','เฟอร์นิเจอร์','ความสะอาด','อื่นๆ'];
@@ -220,15 +229,30 @@ const monthSelect = (id, val) => `<select class="in inline" id="${id}">${months.
 
 /* ---------------- status logic ---------------- */
 const isOcc = r => !!(r.tenantName || r.hasLine);   // มีผู้เช่า = มีชื่อผู้เช่า หรือผูก LINE แล้ว
+const billOf = (room, month, bills) => (bills || []).find(b => b.room === room && b.month === month);
+const owedAmount = (r, month, pays, bills) => { const b = billOf(r.room, month, bills); if (!b) return Number(r.rent) || 0; const paid = (pays || []).filter(p => p.room === r.room && p.month === month && p.status === 'approved').reduce((a, p) => a + (Number(p.amount) || 0), 0); return Math.max(0, Math.round((b.total - paid) * 100) / 100); };
+const dueAmount = (r, month, bills) => { const b = billOf(r.room, month, bills); return b ? b.total : (Number(r.rent) || 0); };
+const fmtN = n => Number(n).toLocaleString('th-TH', { maximumFractionDigits: 2 });
+const rateOf = (r, k) => { const v = r[k + 'Rate']; return v !== '' && v != null ? Number(v) : Number(((A && A.settings) || {})[k + 'Rate'] || 0); };
+function billHTML(b){
+  const L = [['ค่าเช่า', b.rent]];
+  [['water', 'ค่าน้ำ'], ['elec', 'ค่าไฟ']].forEach(([k, l]) => {
+    if (b[k + 'Curr'] !== '' && b[k + 'Curr'] != null) L.push([`${l}<small>มิเตอร์ ${fmtN(b[k + 'Prev'])} → ${fmtN(b[k + 'Curr'])} = ${fmtN(b[k + 'Curr'] - b[k + 'Prev'])} หน่วย × ${fmtN(b[k + 'Rate'])}</small>`, b[k + 'Amt']]);
+  });
+  (b.items || []).forEach(i => L.push([esc(i.label) + (i.kind === 'fee' ? '<small>ค่าปรับ</small>' : ''), i.amount, i.kind]));
+  return `<dl class="bill">${L.map(([l, v, k]) => `<dt>${l}</dt><dd class="num ${k === 'fee' ? 'fee' : ''}">${baht(v)}</dd>`).join('')}<dt class="tot">รวมที่ต้องโอน</dt><dd class="num tot">${baht(b.total)}</dd></dl>${b.note ? `<p class="meta" style="margin:6px 0 0">หมายเหตุ: ${esc(b.note)}</p>` : ''}`;
+}
 const tenantOf = r => r.tenantName || (r.hasLine ? (r.lineName || 'ผู้เช่า (LINE)') : '');
 function dueDate(r, key){ const [y,m] = key.split('-').map(Number); const last = new Date(y, m, 0).getDate(); return new Date(y, m-1, Math.min(Number(r.dueDay) || 1, last)); }
-function payStatus(r, key, pays){
+function payStatus(r, key, pays, bills){
   if (!isOcc(r)) return { code:'vacant', cls:'vac', label:'ห้องว่าง' };
   const ps = pays.filter(p => p.room === r.room && p.month === key).sort((a,b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
-  if (ps.some(p => p.status === 'approved')) return { code:'paid', cls:'ok', label:'ปกติ · ชำระแล้ว' };
+  const bill = billOf(r.room, key, bills), paidSum = ps.filter(p => p.status === 'approved').reduce((a, p) => a + (Number(p.amount) || 0), 0);
+  if (bill ? paidSum >= bill.total - 0.005 : ps.some(p => p.status === 'approved')) return { code:'paid', cls:'ok', label:'ปกติ · ชำระแล้ว' };
   if (ps.some(p => p.status === 'pending')) return { code:'pending', cls:'info', label:'รอตรวจสลิป' };
-  const diff = Math.round((dueDate(r, key) - today) / DAY);
-  if (diff < 0) return { code:'late', cls:'crit', label:`ค้างชำระ ${-diff} วัน` };
+  const diff = Math.round((dueDate(r, key) - today) / DAY), part = bill && paidSum > 0 ? ` (เหลือ ${baht(bill.total - paidSum)})` : '';
+  if (diff < 0) return { code:'late', cls:'crit', label:`ค้างชำระ ${-diff} วัน${part}` };
+  if (part) return { code:'partial', cls:'warn', label:`ชำระบางส่วน${part}` };
   if (ps[0]?.status === 'rejected') return { code:'rejected', cls:'crit', label:'สลิปไม่ผ่าน ส่งใหม่' };
   if (diff === 0) return { code:'soon', cls:'warn', label:'ครบกำหนดวันนี้' };
   if (diff <= 3) return { code:'soon', cls:'warn', label:`ครบกำหนดใน ${diff} วัน` };
@@ -249,13 +273,14 @@ const buildingsOf = rs => [...new Set(rs.map(r => r.building).filter(Boolean))].
 function slipCard(p, owner){
   const r = owner ? (A.rooms.find(x => x.room === p.room) || {}) : T.room;
   const st = p.status === 'approved' ? ['ยืนยันแล้ว','ok'] : p.status === 'rejected' ? ['ไม่ผ่าน','crit'] : ['รอตรวจ','info'];
-  const mismatch = r.rent && Number(p.amount) !== Number(r.rent);
+  const bill = owner ? billOf(p.room, p.month, A.bills) : null, due = owner ? owedAmount(r, p.month, A.payments.filter(x => x.id !== p.id && x.status === 'approved' && x.id < p.id), A.bills) : 0;
+  const mismatch = owner && due && Number(p.amount) !== due;
   const thumb = p.fileId ? `<button class="thumb" data-img="${esc(p.fileId)}" aria-label="ดูสลิป">${imgThumb(p.fileId)}</button>` : `<div class="thumb">${p.by === 'owner' ? 'ไม่มีสลิป<br>(บันทึกโดยหอ)' : 'ไม่มีรูป'}</div>`;
   return `<article class="card slip">${thumb}
     <div style="min-width:0">
       <div class="head"><h3>${owner ? `ห้อง <span class="num">${esc(p.room)}</span> · ` : ''}${esc(thMonth(p.month))}</h3><span class="pill ${st[1]}">${st[0]}</span></div>
       <div class="meta">${owner ? `<span>${esc((r.building ? r.building + ' · ' : '') + (tenantOf(r) || '—'))}</span>` : ''}<span>${esc(thTime(p.submittedAt))}</span>${p.by === 'owner' ? '<span>บันทึกโดยเจ้าของหอ</span>' : ''}</div>
-      <p style="margin:6px 0 0"><span class="num" style="font-size:19px;font-weight:600">${baht(p.amount)}</span>${owner && mismatch ? `<span class="warnline"> · ไม่ตรงค่าเช่า (${baht(r.rent)})</span>` : ''}</p>
+      <p style="margin:6px 0 0"><span class="num" style="font-size:19px;font-weight:600">${baht(p.amount)}</span>${mismatch ? `<span class="warnline"> · ไม่ตรง${bill ? 'ยอดบิล' : 'ค่าเช่า'} (${baht(due)})</span>` : ''}</p>
       ${p.note ? `<p class="meta" style="margin:4px 0 0">หมายเหตุ: ${esc(p.note)}</p>` : ''}
       ${p.status === 'rejected' && p.reason ? `<p class="warnline" style="margin:4px 0 0">เหตุผล: ${esc(p.reason)}</p>` : ''}
       ${owner && p.status === 'pending' ? (ui.rejectOpen === p.id
@@ -287,7 +312,7 @@ async function loadAdmin(){ A = await api('adminData'); if (A.dormName) setDorm(
 function renderAdmin(){
   const rooms = sortRooms(A.rooms), k = ui.month, P = A.payments;
   const occ = rooms.filter(isOcc), vac = rooms.length - occ.length;
-  const st = occ.map(r => payStatus(r, k, P));
+  const st = occ.map(r => payStatus(r, k, P, A.bills));
   const paid = st.filter(s => s.code === 'paid').length, pend = st.filter(s => s.code === 'pending').length, late = st.filter(s => s.code === 'late' || s.code === 'rejected').length;
   const income = P.filter(p => p.month === k && p.status === 'approved').reduce((a,p) => a + Number(p.amount || 0), 0);
   const ps = P.filter(p => p.status === 'pending').length, oi = A.issues.filter(i => i.status !== 'done').length;
@@ -302,11 +327,12 @@ function renderAdmin(){
       <div><b>${baht(income)}</b><span>รับแล้ว ${esc(thMonth(k))}</span></div>
     </section>
     <nav class="tabs" role="tablist">
-      ${tabBtn('rooms','ห้องพัก')}${tabBtn('slips','ตรวจสลิป', ps ? `<span class="badge info">${ps}</span>` : '')}
+      ${tabBtn('rooms','ห้องพัก')}${tabBtn('bills','บิล')}${tabBtn('slips','ตรวจสลิป', ps ? `<span class="badge info">${ps}</span>` : '')}
       ${tabBtn('issues','แจ้งซ่อม', oi ? `<span class="badge">${oi}</span>` : '')}${tabBtn('contracts','สัญญา', nearEnd ? `<span class="badge">${nearEnd}</span>` : '')}
     </nav><div id="tabBody"></div>`;
   const b = $('#tabBody');
   if (ui.tab === 'rooms') b.innerHTML = roomsTab(rooms);
+  if (ui.tab === 'bills') b.innerHTML = billsTab(rooms);
   if (ui.tab === 'slips') { b.innerHTML = slipsTab(); autoloadThumbs(); }
   if (ui.tab === 'issues') b.innerHTML = issuesTab();
   if (ui.tab === 'contracts') b.innerHTML = contractsTab(occ);
@@ -318,14 +344,14 @@ function roomsTab(rooms){
   const F = { all:'ทั้งหมด', occ:'มีผู้เช่า', vacant:'ห้องว่าง', late:'ค้างชำระ', pending:'รอตรวจ', soon:'ใกล้ครบกำหนด', paid:'ชำระแล้ว' };
   const blds = buildingsOf(rooms); if (ui.building && !blds.includes(ui.building)) ui.building = '';
   const inBld = rooms.filter(r => !ui.building || r.building === ui.building);
-  const match = (r, f) => { const s = payStatus(r, ui.month, A.payments).code; return f === 'all' || (f === 'occ' ? s !== 'vacant' : s === f || (f === 'late' && s === 'rejected')); };
+  const match = (r, f) => { const s = payStatus(r, ui.month, A.payments, A.bills).code; return f === 'all' || (f === 'occ' ? s !== 'vacant' : s === f || (f === 'late' && s === 'rejected')); };
   const shown = inBld.filter(r => match(r, ui.filter));
   return `<div class="toolbar">${monthSelect('monthSel', ui.month)}${blds.length ? `<select class="in inline" id="bldSel" aria-label="เลือกตึก"><option value="">ทุกตึก</option>${blds.map(b => `<option value="${esc(b)}" ${b === ui.building ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>` : ''}<span class="grow"></span><button class="btn pri sm" data-act="newRoom">+ เพิ่มห้อง</button></div>
     <div class="chips" style="margin-bottom:12px">${Object.entries(F).map(([k,l]) => `<button class="chip" data-filter="${k}" aria-pressed="${ui.filter === k}">${l}<span class="n">${inBld.filter(r => match(r, k)).length}</span></button>`).join('')}</div>
     ${shown.length ? `<div class="grid">${shown.map(plate).join('')}</div>` : `<div class="empty">ไม่มีห้องในกลุ่มนี้</div>`}`;
 }
 function plate(r){
-  const s = payStatus(r, ui.month, A.payments), c = contractStatus(r);
+  const s = payStatus(r, ui.month, A.payments, A.bills), c = contractStatus(r);
   const stripe = { ok:'var(--ok)', info:'var(--info)', warn:'var(--warn)', crit:'var(--crit)', muted:'transparent', vac:'transparent' }[s.cls];
   return `<button class="plate${isOcc(r) ? '' : ' vacant'}" data-room="${esc(r.room)}" style="--stripe:${stripe}">
     <div class="row1"><div class="no">${esc(r.room)}<small>${r.building ? esc(r.building) + ' · ' : ''}ชั้น ${esc(r.floor || '—')}</small></div><span class="pill ${s.cls}">${esc(s.label)}</span></div>
@@ -333,6 +359,87 @@ function plate(r){
     <dl><dt>ค่าเช่า</dt><dd class="num">${baht(r.rent)}</dd>
     ${isOcc(r) ? `<dt>เก็บเงิน</dt><dd>${esc(thDate(fmtISO(dueDate(r, ui.month))))}</dd><dt>สัญญา</dt><dd><span class="pill sm ${c.cls}">${esc(c.label)}</span></dd>` : ''}</dl>
   </button>`;
+}
+function billsTab(rooms){
+  const blds = buildingsOf(rooms); if (ui.building && !blds.includes(ui.building)) ui.building = '';
+  const occ = rooms.filter(r => isOcc(r) && (!ui.building || r.building === ui.building));
+  const done = occ.filter(r => billOf(r.room, ui.month, A.bills)).length, S = A.settings || {};
+  return `<div class="toolbar">${monthSelect('monthSel', ui.month)}${blds.length ? `<select class="in inline" id="bldSel" aria-label="เลือกตึก"><option value="">ทุกตึก</option>${blds.map(b => `<option value="${esc(b)}" ${b === ui.building ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>` : ''}<span class="grow"></span><button class="btn sm" data-act="rates">ตั้งเรทน้ำ-ไฟ</button></div>
+    <p class="meta" style="margin:0 0 10px">เรทกลาง น้ำ ${baht(S.waterRate)} · ไฟ ${baht(S.elecRate)} ต่อหน่วย · ออกบิล${esc(thMonth(ui.month))}แล้ว ${done}/${occ.length} ห้อง</p>
+    ${occ.length ? `<div class="list">${occ.map(billRow).join('')}</div>` : `<div class="empty">ยังไม่มีห้องที่มีผู้เช่า</div>`}`;
+}
+function billRow(r){
+  const b = billOf(r.room, ui.month, A.bills);
+  const use = b ? [b.waterCurr !== '' ? `น้ำ ${fmtN(b.waterCurr - b.waterPrev)}` : '', b.elecCurr !== '' ? `ไฟ ${fmtN(b.elecCurr - b.elecPrev)} หน่วย` : ''].filter(Boolean).join(' · ') : '';
+  return `<button class="card billrow" data-act="openBill" data-no="${esc(r.room)}"><span><b class="num">${esc(r.room)}</b> <span class="meta">${esc((r.building ? r.building + ' · ' : '') + (tenantOf(r) || '—'))}</span>
+    <span class="meta" style="display:block">${b ? esc(use || 'เฉพาะค่าเช่า/รายการอื่น') : 'ยังไม่ออกบิล · ผู้เช่าจะเห็นเฉพาะค่าเช่า ' + baht(r.rent)}</span></span>
+    <span class="pill ${b ? 'ok' : 'warn'}">${b ? baht(b.total) : 'ยังไม่ออกบิล'}</span></button>`;
+}
+function openRates(){
+  const S = A.settings || {};
+  openPanel(`<h2 style="font-size:22px">ตั้งเรทน้ำ-ไฟ</h2><p class="meta">ใช้กับทุกห้อง ห้องไหนคิดเรทต่างออกไป ตั้งเฉพาะห้องได้ในหน้าแก้ไขห้อง</p>
+    <form class="form" id="rateForm" style="margin-top:12px"><div class="two">
+      <label>ค่าน้ำ (บาท/หน่วย)<input class="in num" id="rtWater" type="number" min="0" step="any" inputmode="decimal" value="${esc(S.waterRate || '')}"></label>
+      <label>ค่าไฟ (บาท/หน่วย)<input class="in num" id="rtElec" type="number" min="0" step="any" inputmode="decimal" value="${esc(S.elecRate || '')}"></label></div>
+      <button class="btn pri block" type="submit">บันทึกเรท</button></form>`);
+  $('#rateForm').onsubmit = e => { e.preventDefault(); const btn = e.target.querySelector('[type=submit]');
+    busy(btn, async () => { await api('saveSettings', { waterRate: $('#rtWater').value, elecRate: $('#rtElec').value }); toast('บันทึกเรทแล้ว'); await loadAdmin(); closePanel(); });
+  };
+}
+function openBill(no){
+  const r = A.rooms.find(x => x.room === no); if (!r) return;
+  const month = ui.month, ex = billOf(no, month, A.bills);
+  const prevBills = A.bills.filter(b => b.room === no && b.month < month).sort((a, b) => b.month.localeCompare(a.month));
+  const last = k => { const p = prevBills.find(b => b[k + 'Curr'] !== '' && b[k + 'Curr'] != null); return p ? p[k + 'Curr'] : ''; };
+  const init = ex ? { wp: ex.waterPrev, wc: ex.waterCurr, ep: ex.elecPrev, ec: ex.elecCurr, items: ex.items, note: ex.note }
+    : { wp: last('water'), wc: '', ep: last('elec'), ec: '', items: (r.recurring || []).map(i => ({ label: i.label, amount: i.amount, kind: 'other' })), note: '' };
+  const wRate = rateOf(r, 'water'), eRate = rateOf(r, 'elec');
+  const meter = (title, rate, a, b, p, c) => `<h3 class="sect" style="margin-bottom:6px">${title} <small class="meta">${rate ? 'เรท ' + baht(rate) + '/หน่วย' : '· ยังไม่ได้ตั้งเรท'}</small></h3>
+    <div class="two"><label>เลขมิเตอร์ครั้งก่อน<input class="in num" id="${a}" type="number" min="0" step="any" inputmode="decimal" value="${esc(p)}"></label>
+    <label>เลขมิเตอร์ล่าสุด<input class="in num" id="${b}" type="number" min="0" step="any" inputmode="decimal" value="${esc(c)}"></label></div>`;
+  openPanel(`<h2 style="font-size:22px">บิล ห้อง <span class="num">${esc(no)}</span></h2><p class="meta" style="margin:2px 0 8px">${esc(thMonth(month))} · ${esc(tenantOf(r))} · ค่าเช่า ${baht(r.rent)}</p>
+    <form class="form" id="billForm">
+      ${meter('ค่าน้ำ', wRate, 'bfWPrev', 'bfWCurr', init.wp, init.wc)}${meter('ค่าไฟ', eRate, 'bfEPrev', 'bfECurr', init.ep, init.ec)}
+      <h3 class="sect" style="margin-bottom:6px">ค่าใช้จ่ายอื่น / ค่าปรับ</h3>
+      <div id="bfItems"></div>
+      <div class="actions" style="margin-top:0"><button class="btn sm" type="button" id="bfAdd">+ เพิ่มรายการ</button><button class="btn sm" type="button" id="bfFine">+ ค่าปรับ</button></div>
+      <label>หมายเหตุถึงผู้เช่า<input class="in" id="bfNote" maxlength="300" value="${esc(init.note)}"></label>
+      <div class="bigtotal"><span>รวมที่ต้องโอน</span><b class="num" id="bfTotal"></b></div><p class="meta" id="bfBreak" style="margin:0"></p>
+      <div class="actions"><button class="btn pri" type="submit">บันทึกบิล</button>${ex ? '<span class="grow"></span><button class="btn danger" type="button" id="bfDel">ลบบิล</button>' : ''}</div>
+    </form>`);
+  const box = $('#bfItems');
+  const calc = () => {
+    let t = Number(r.rent) || 0; const parts = [];
+    [['น้ำ', '#bfWPrev', '#bfWCurr', wRate], ['ไฟ', '#bfEPrev', '#bfECurr', eRate]].forEach(([k, pi, ci, rate]) => {
+      const a = $(pi).value, b = $(ci).value;
+      if (a !== '' && b !== '' && Number(b) >= Number(a)) { const amt = Math.round((Number(b) - Number(a)) * rate * 100) / 100; t += amt; parts.push(`${k} ${fmtN(b - a)} หน่วย ${baht(amt)}`); }
+    });
+    box.querySelectorAll('.itemrow').forEach(row => { const v = Number(row.children[1].value); if (isFinite(v)) t += v; });
+    t = Math.round(t * 100) / 100;
+    $('#bfTotal').textContent = baht(t); $('#bfBreak').textContent = 'ค่าเช่า ' + baht(r.rent) + parts.map(x => ' + ' + x).join('');
+  };
+  const addRow = (label, amount, kind) => {
+    const row = document.createElement('div'); row.className = 'itemrow'; row.dataset.kind = kind || 'other';
+    row.innerHTML = `<input class="in" maxlength="60" placeholder="ชื่อรายการ" aria-label="ชื่อรายการ"><input class="in num" type="number" step="any" inputmode="decimal" placeholder="บาท" aria-label="จำนวนเงิน"><button class="btn sm" type="button" aria-label="ลบรายการ">✕</button>`;
+    row.children[0].value = label || ''; row.children[1].value = amount === undefined ? '' : amount;
+    row.children[2].onclick = () => { row.remove(); calc(); };
+    box.appendChild(row); calc(); return row;
+  };
+  init.items.forEach(i => addRow(i.label, i.amount, i.kind));
+  $('#bfAdd').onclick = () => addRow('', '', 'other').children[0].focus();
+  $('#bfFine').onclick = () => addRow('ค่าปรับจ่ายล่าช้า', '', 'fee').children[1].focus();
+  $('#billForm').addEventListener('input', calc); calc();
+  $('#billForm').onsubmit = e => { e.preventDefault(); const btn = e.target.querySelector('[type=submit]');
+    const items = [...box.querySelectorAll('.itemrow')].map(row => ({ label: row.children[0].value.trim(), amount: row.children[1].value, kind: row.dataset.kind })).filter(i => i.label || i.amount !== '');
+    busy(btn, async () => {
+      await api('saveBill', { room: no, month, water: { prev: $('#bfWPrev').value, curr: $('#bfWCurr').value }, elec: { prev: $('#bfEPrev').value, curr: $('#bfECurr').value }, items, note: $('#bfNote').value });
+      toast('บันทึกบิลห้อง ' + no + ' แล้ว'); await loadAdmin(); closePanel();
+    });
+  };
+  const del = $('#bfDel'); if (del) del.onclick = () => {
+    if (!del.dataset.armed) { del.dataset.armed = 1; del.textContent = 'กดอีกครั้งเพื่อลบ'; return; }
+    busy(del, async () => { await api('deleteBill', { room: no, month }); toast('ลบบิลแล้ว เหลือเก็บเฉพาะค่าเช่า'); await loadAdmin(); closePanel(); });
+  };
 }
 function slipsTab(){
   let items = A.payments.slice().sort((a,b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
@@ -384,17 +491,17 @@ function inviteText(r){
 function openRoom(no){
   openPanel(`<div id="pDyn"></div>`, () => {
     const r = A.rooms.find(x => x.room === no); if (!r) return closePanel();
-    const s = payStatus(r, ui.month, A.payments), c = contractStatus(r);
+    const s = payStatus(r, ui.month, A.payments, A.bills), c = contractStatus(r);
     const pays = A.payments.filter(p => p.room === no).sort((a,b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
     const iss = A.issues.filter(i => i.room === no);
     $('#pDyn').innerHTML = `<h2 style="font-size:24px">ห้อง <span class="num">${esc(no)}</span>${r.building ? `<small style="font-size:14px;font-weight:400;color:var(--muted)"> · ${esc(r.building)}</small>` : ''}</h2>
       <p class="meta" style="margin:2px 0 12px">${esc(tenantOf(r) || 'ห้องว่าง')}${r.phone ? ` · <span class="num" style="user-select:all">${esc(r.phone)}</span>` : ''}</p>
       <div class="actions" style="margin:0 0 12px"><button class="btn sm" data-act="editRoom" data-no="${esc(no)}">แก้ไขข้อมูล/สัญญา</button>
-        ${isOcc(r) ? `<button class="btn pri sm" data-act="recordPay" data-no="${esc(no)}">บันทึกการชำระ</button>` : ''}
+        ${isOcc(r) ? `<button class="btn pri sm" data-act="openBill" data-no="${esc(no)}">ออกบิล / จดมิเตอร์</button><button class="btn sm" data-act="recordPay" data-no="${esc(no)}">บันทึกการชำระ</button>` : ''}
         ${r.hasLine ? `<button class="btn sm" data-act="remind" data-no="${esc(no)}">ส่งแจ้งเตือนค่าเช่า</button>` : ''}</div>
       <div class="card"><dl class="info-list">
         <dt>${esc(thMonth(ui.month))}</dt><dd><span class="pill ${s.cls}">${esc(s.label)}</span></dd>
-        <dt>ค่าเช่า</dt><dd class="num">${baht(r.rent)}</dd><dt>เก็บเงิน</dt><dd>ทุกวันที่ ${esc(r.dueDay)}</dd>
+        <dt>ค่าเช่า</dt><dd class="num">${baht(r.rent)}</dd><dt>ยอดที่ต้องโอน</dt><dd><span class="num">${baht(dueAmount(r, ui.month, A.bills))}</span> <span class="meta">${billOf(no, ui.month, A.bills) ? '(ตามบิล)' : '(ยังไม่ออกบิล)'}</span></dd><dt>เก็บเงิน</dt><dd>ทุกวันที่ ${esc(r.dueDay)}</dd>
         <dt>สัญญา</dt><dd>${esc(thDate(r.contractStart))} – ${esc(thDate(r.contractEnd))} <span class="pill sm ${c.cls}">${esc(c.label)}</span></dd>
         <dt>เงินประกัน</dt><dd class="num">${baht(r.deposit)}</dd>${r.note ? `<dt>หมายเหตุ</dt><dd>${esc(r.note)}</dd>` : ''}</dl></div>
       <h3 class="sect">LINE ของผู้เช่า</h3>
@@ -436,13 +543,17 @@ function openRoomForm(no){
       <div class="two"><label>เริ่มสัญญา<input class="in" id="rfStart" type="date" value="${esc(r.contractStart || '')}"></label>
       <label>สิ้นสุดสัญญา<input class="in" id="rfEnd" type="date" value="${esc(r.contractEnd || '')}"></label></div>
       <label>เงินประกัน (บาท)<input class="in num" id="rfDeposit" type="number" min="0" inputmode="numeric" value="${esc(r.deposit || '')}"></label>
+      <div class="two"><label>เรทน้ำเฉพาะห้อง<input class="in num" id="rfWRate" type="number" min="0" step="any" inputmode="decimal" placeholder="ใช้เรทกลาง" value="${esc(r.waterRate ?? '')}"></label>
+      <label>เรทไฟเฉพาะห้อง<input class="in num" id="rfERate" type="number" min="0" step="any" inputmode="decimal" placeholder="ใช้เรทกลาง" value="${esc(r.elecRate ?? '')}"></label></div>
+      <label>ค่าใช้จ่ายประจำเดือน (บรรทัดละรายการ ชื่อ:จำนวน)<textarea class="in" id="rfRecurring" placeholder="อินเทอร์เน็ต:200&#10;ส่วนกลาง:100">${esc((r.recurring || []).map(i => i.label + ':' + i.amount).join('\n'))}</textarea></label>
       <label>หมายเหตุ<textarea class="in" id="rfNote">${esc(r.note || '')}</textarea></label>
       <div class="actions"><button class="btn pri" type="submit">บันทึก</button>${no ? `<button class="btn" type="button" data-act="openRoom" data-no="${esc(no)}">ยกเลิก</button><span class="grow"></span><button class="btn danger" type="button" id="rfDel">ลบห้อง</button>` : ''}</div>
     </form>`);
   $('#roomForm').onsubmit = e => { e.preventDefault(); const btn = e.target.querySelector('[type=submit]');
     const room = $('#rfNo').value.trim();
     busy(btn, async () => {
-      await api('saveRoom', { isNew: !no, original: no, room, building: $('#rfBuilding').value, floor: $('#rfFloor').value, tenantName: $('#rfTenant').value, phone: $('#rfPhone').value, rent: $('#rfRent').value, dueDay: $('#rfDue').value, contractStart: $('#rfStart').value, contractEnd: $('#rfEnd').value, deposit: $('#rfDeposit').value, note: $('#rfNote').value });
+      const recurring = $('#rfRecurring').value.split('\n').map(s => s.trim()).filter(Boolean).map(s => { const m = s.match(/^(.+?)\s*[:：]\s*(\d+(?:\.\d+)?)$/); if (!m) throw { message: 'ค่าใช้จ่ายประจำ "' + s + '" ไม่ถูกต้อง ใช้รูปแบบ ชื่อ:จำนวน เช่น อินเทอร์เน็ต:200' }; return { label: m[1], amount: m[2] }; });
+      await api('saveRoom', { isNew: !no, original: no, room, building: $('#rfBuilding').value, waterRate: $('#rfWRate').value, elecRate: $('#rfERate').value, recurring, floor: $('#rfFloor').value, tenantName: $('#rfTenant').value, phone: $('#rfPhone').value, rent: $('#rfRent').value, dueDay: $('#rfDue').value, contractStart: $('#rfStart').value, contractEnd: $('#rfEnd').value, deposit: $('#rfDeposit').value, note: $('#rfNote').value });
       toast('บันทึกห้อง ' + room + ' แล้ว'); await loadAdmin(); openRoom(room);
     });
   };
@@ -454,15 +565,15 @@ function openRoomForm(no){
 function payFields(r, owner){
   const paidThis = owner ? A.payments.some(p => p.room === r.room && p.month === CUR && p.status === 'approved') : T.payments.some(p => p.month === CUR && p.status !== 'rejected');
   const m = paidThis ? months[months.indexOf(CUR) - 1] : CUR;
-  return `<div class="two"><label>ค่าเช่าเดือน${monthSelect('pfMonth', m)}</label>
-    <label>ยอดโอน (บาท)<input class="in num" id="pfAmount" type="number" min="0" step="0.01" inputmode="decimal" required value="${esc(r.rent ?? '')}"></label></div>
+  return `<div class="two"><label>ชำระเดือน${monthSelect('pfMonth', m)}</label>
+    <label>ยอดโอน (บาท)<input class="in num" id="pfAmount" type="number" min="0" step="0.01" inputmode="decimal" required value="${esc(owedAmount(r, m, owner ? A.payments : T.payments, owner ? A.bills : T.bills))}"></label></div>
     <label>รูปสลิป${owner ? ' (ถ้ามี)' : ''}<input class="in" type="file" id="pfSlip" accept="image/*" ${owner ? '' : 'required'}></label>
     <label>หมายเหตุ<input class="in" id="pfNote" maxlength="300" placeholder="${owner ? 'เช่น จ่ายเงินสด' : 'เช่น รวมค่าน้ำค่าไฟแล้ว'}"></label>
     ${owner ? `<label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="pfNotify" ${r.hasLine ? 'checked' : 'disabled'}> แจ้งผู้เช่าทาง LINE</label>` : ''}
     <button class="btn pri block" type="submit">${owner ? 'บันทึกและยืนยัน' : 'ส่งสลิปให้ตรวจ'}</button>`;
 }
 function openRecordPay(no){
-  const r = A.rooms.find(x => x.room === no);
+  const r = A.rooms.find(x => x.room === no); ui.payRoom = no;
   openPanel(`<h2 style="font-size:22px">บันทึกการชำระ ห้อง ${esc(no)}</h2><p class="meta">ใช้เมื่อผู้เช่าจ่ายเงินสด หรือส่งสลิปมาทางแชท</p>
     <form class="form" id="ownerPay" style="margin-top:12px">${payFields(r, true)}</form>`);
   $('#ownerPay').onsubmit = e => { e.preventDefault(); const btn = e.target.querySelector('[type=submit]');
@@ -499,8 +610,8 @@ function renderTenant(){
         const f = $('#pfSlip').files[0]; if (!f) throw { message: 'แนบรูปสลิปก่อนส่ง' };
         const image = await compressImage(f);
         await api('submitSlip', { month: $('#pfMonth').value, amount: $('#pfAmount').value, note: $('#pfNote').value, image });
-        e.target.reset(); $('#pfAmount').value = r.rent ?? '';
-        toast('ส่งสลิปแล้ว รอเจ้าของหอยืนยัน'); await loadTenant();
+        e.target.reset();
+        toast('ส่งสลิปแล้ว รอเจ้าของหอยืนยัน'); await loadTenant(); $('#pfAmount').value = owedAmount(T.room, $('#pfMonth').value, T.payments, T.bills);
       });
     };
     $('#issueForm').onsubmit = e => { e.preventDefault(); const btn = e.target.querySelector('[type=submit]');
@@ -511,10 +622,13 @@ function renderTenant(){
       });
     };
   }
-  const s = payStatus(r, CUR, T.payments), c = contractStatus(r), due = dueDate(r, CUR);
+  const s = payStatus(r, CUR, T.payments, T.bills), c = contractStatus(r), due = dueDate(r, CUR);
+  const curBill = billOf(r.room, CUR, T.bills), otherBills = (T.bills || []).filter(b => b.month !== CUR);
   $('#tStatus').innerHTML = `<div class="head"><h2 style="font-size:22px">${r.building ? `<small style="font-size:14px;font-weight:400;color:var(--muted)">${esc(r.building)} </small>` : ''}ห้อง <span class="num">${esc(r.room)}</span></h2><span class="meta">${esc(r.tenantName || ME.name)}</span></div>
-    <div class="bigstatus"><span class="meta">ค่าเช่า ${esc(thMonth(CUR))}</span><span class="pill ${s.cls}">${esc(s.label)}</span>
-      <span><span class="num" style="font-size:21px;font-weight:600">${baht(r.rent)}</span> · กำหนดชำระ ${esc(thDate(fmtISO(due)))}</span></div>
+    <div class="bigstatus"><span class="meta">${curBill ? 'ยอดบิล' : 'ค่าเช่า'} ${esc(thMonth(CUR))}</span><span class="pill ${s.cls}">${esc(s.label)}</span>
+      <span><span class="num" style="font-size:21px;font-weight:600">${baht(dueAmount(r, CUR, T.bills))}</span> · กำหนดชำระ ${esc(thDate(fmtISO(due)))}</span></div>
+    ${curBill ? `<h3 class="sect">รายละเอียดบิล</h3>${billHTML(curBill)}` : ''}
+    ${otherBills.length ? `<h3 class="sect">บิลเดือนอื่น</h3><div class="list">${otherBills.map(b => `<details class="card"><summary>${esc(thMonth(b.month))} · <b class="num">${baht(b.total)}</b></summary>${billHTML(b)}</details>`).join('')}</div>` : ''}
     <dl class="info-list"><dt>เก็บเงินทุก</dt><dd>วันที่ ${esc(r.dueDay)} ของเดือน</dd>
       <dt>สัญญา</dt><dd>${esc(thDate(r.contractStart))} – ${esc(thDate(r.contractEnd))} <span class="pill sm ${c.cls}">${esc(c.label)}</span></dd>
       <dt>เงินประกัน</dt><dd class="num">${baht(r.deposit)}</dd></dl>
@@ -588,6 +702,8 @@ document.addEventListener('click', e => {
   if (d.act === 'editRoom') return openRoomForm(d.no);
   if (d.act === 'openRoom') return openRoom(d.no);
   if (d.act === 'recordPay') return openRecordPay(d.no);
+  if (d.act === 'openBill') return openBill(d.no);
+  if (d.act === 'rates') return openRates();
   if (d.act === 'remind') return busy(t, async () => { await api('remind', { room: d.no, month: ui.month }); toast('ส่งแจ้งเตือนทาง LINE แล้ว'); });
   if (d.approve) return busy(t, async () => { await api('review', { id: d.approve, decision: 'approved' }); toast('ยืนยันแล้ว ผู้เช่าได้รับแจ้งทาง LINE'); await loadAdmin(); });
   if (d.reject) { ui.rejectOpen = d.reject; renderAdmin(); setTimeout(() => document.getElementById('rej-' + d.reject)?.focus(), 0); return; }
@@ -598,7 +714,9 @@ document.addEventListener('click', e => {
   if (d.issue) { const reply = document.getElementById('reply-' + d.issue)?.value;
     return busy(t, async () => { await api('setIssueStatus', { id: d.issue, status: d.st, reply }); toast('อัปเดตเป็น "' + ISSUE_ST[d.st][0] + '" และแจ้งผู้เช่าแล้ว'); await loadAdmin(); }); }
 });
-document.addEventListener('change', e => { if (e.target.id === 'monthSel') { ui.month = e.target.value; renderAdmin(); } if (e.target.id === 'bldSel') { ui.building = e.target.value; renderAdmin(); } });
+document.addEventListener('change', e => {
+  if (e.target.id === 'pfMonth' && ME) { const owner = ME.isAdmin, rm = owner ? A.rooms.find(x => x.room === ui.payRoom) : T.room, amt = $('#pfAmount'); if (rm && amt) amt.value = owedAmount(rm, e.target.value, owner ? A.payments : T.payments, owner ? A.bills : T.bills); }
+  if (e.target.id === 'monthSel') { ui.month = e.target.value; renderAdmin(); } if (e.target.id === 'bldSel') { ui.building = e.target.value; renderAdmin(); } });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { const im = document.querySelector('.ov.img'); if (im) im.remove(); else closePanel(); } });
 $('#refresh').onclick = () => busy($('#refresh'), async () => { if (ME && ME.isAdmin) await loadAdmin(); else if (T) await loadTenant(); toast('อัปเดตแล้ว'); });
 let lastHidden = 0;
