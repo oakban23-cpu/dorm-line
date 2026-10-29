@@ -89,6 +89,29 @@ textarea.in{resize:vertical;min-height:72px}
 .bigtotal{display:flex;justify-content:space-between;align-items:baseline;background:var(--sunk);border-radius:var(--r);padding:10px 14px}
 .bigtotal b{font-size:22px}
 details.card{padding:10px 14px} details.card summary{cursor:pointer}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg button{border:0;background:none;padding:5px 10px;cursor:pointer;color:var(--muted);font-size:13.5px;display:inline-flex;align-items:center;gap:5px}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--sunk);color:var(--ink);font-weight:600}
+.seg svg{width:15px;height:15px;flex:none}
+.legend{display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;margin:0 0 12px;font-size:13.5px;color:var(--muted)}
+.legend b{font-family:var(--f-mono);color:var(--ink);margin-left:3px}
+.sw{display:inline-block;width:14px;height:14px;border-radius:4px;border:1px solid;vertical-align:-2px;margin-right:5px}
+.sw.occ{background:var(--crit);border-color:var(--crit)} .sw.free{background:var(--ok-bg);border-color:var(--ok)}
+.omap{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,138px),1fr));gap:14px 12px;max-width:860px}
+.bmap{max-width:430px;min-width:0}
+.bmap h3{font-size:16px;margin:0 0 6px;display:flex;align-items:baseline;gap:8px}
+.bmap h3 small{font-size:12.5px;color:var(--muted);font-weight:400}
+.frow{display:grid;grid-template-columns:12px minmax(0,1fr);gap:3px;align-items:center;margin-bottom:2px}
+.fl{font-size:10.5px;color:var(--muted);text-align:center}
+.tiles{display:grid;grid-template-columns:repeat(var(--cols,6),minmax(0,1fr));gap:2px}
+.tile{border:1px solid;border-radius:5px;height:30px;padding:0;cursor:pointer;font:600 10.5px/1 var(--f-mono);display:grid;place-items:center;min-width:0;overflow:hidden}
+.tile:hover{filter:brightness(1.1)}
+.tile.occ{background:var(--crit);border-color:var(--crit);color:var(--brand-ink)}
+.tile.free{background:var(--ok-bg);border-color:var(--ok);color:var(--ok)}
+.tile .pf{display:none}
+@media (min-width:520px){.tile{height:36px;font-size:12.5px} .tiles{gap:3px} .frow{grid-template-columns:18px minmax(0,1fr);gap:4px;margin-bottom:3px} .fl{font-size:12px} .omap{gap:14px 16px}}
+@media (min-width:700px){.tile .pf{display:inline}}
 .pill.vac{background:transparent;color:var(--brand);box-shadow:inset 0 0 0 1px currentColor}
 .plate.vacant{background:transparent;border-style:dashed}
 .pill.sm{font-size:11.5px;padding:0 8px}
@@ -177,7 +200,9 @@ const ISSUE_ST = { new:['ใหม่','crit'], ack:['รับเรื่อ�
 const params = new URLSearchParams(location.search);
 
 let ME = null, A = null, T = null;     // me, adminData, tenantHome
-const ui = { tab: 'rooms', month: CUR, building: '', filter: 'all', slipFilter: 'pending', rejectOpen: null, panel: null };
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+const ui = { tab: 'rooms', month: CUR, building: '', filter: 'all', slipFilter: 'pending', rejectOpen: null, panel: null, view: lsGet('dormView') === 'map' ? 'map' : 'detail' };
 const imgCache = {};
 
 /* ---------------- helpers ---------------- */
@@ -345,10 +370,28 @@ function roomsTab(rooms){
   const blds = buildingsOf(rooms); if (ui.building && !blds.includes(ui.building)) ui.building = '';
   const inBld = rooms.filter(r => !ui.building || r.building === ui.building);
   const match = (r, f) => { const s = payStatus(r, ui.month, A.payments, A.bills).code; return f === 'all' || (f === 'occ' ? s !== 'vacant' : s === f || (f === 'late' && s === 'rejected')); };
-  const shown = inBld.filter(r => match(r, ui.filter));
-  return `<div class="toolbar">${monthSelect('monthSel', ui.month)}${blds.length ? `<select class="in inline" id="bldSel" aria-label="เลือกตึก"><option value="">ทุกตึก</option>${blds.map(b => `<option value="${esc(b)}" ${b === ui.building ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>` : ''}<span class="grow"></span><button class="btn pri sm" data-act="newRoom">+ เพิ่มห้อง</button></div>
-    <div class="chips" style="margin-bottom:12px">${Object.entries(F).map(([k,l]) => `<button class="chip" data-filter="${k}" aria-pressed="${ui.filter === k}">${l}<span class="n">${inBld.filter(r => match(r, k)).length}</span></button>`).join('')}</div>
-    ${shown.length ? `<div class="grid">${shown.map(plate).join('')}</div>` : `<div class="empty">ไม่มีห้องในกลุ่มนี้</div>`}`;
+  const shown = inBld.filter(r => match(r, ui.filter)), map = ui.view === 'map';
+  const seg = `<span class="seg" role="group" aria-label="มุมมอง"><button data-view="detail" aria-pressed="${!map}" title="แสดงเป็นการ์ดรายละเอียด"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/></svg>รายละเอียด</button><button data-view="map" aria-pressed="${map}" title="แสดงเป็นแผนผังห้องเล็ก ๆ"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>ภาพรวม</button></span>`;
+  return `<div class="toolbar">${map ? '' : monthSelect('monthSel', ui.month)}${blds.length ? `<select class="in inline" id="bldSel" aria-label="เลือกตึก"><option value="">ทุกตึก</option>${blds.map(b => `<option value="${esc(b)}" ${b === ui.building ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>` : ''}${seg}<span class="grow"></span><button class="btn pri sm" data-act="newRoom">+ เพิ่มห้อง</button></div>
+    ${map ? mapView(inBld) : `<div class="chips" style="margin-bottom:12px">${Object.entries(F).map(([k,l]) => `<button class="chip" data-filter="${k}" aria-pressed="${ui.filter === k}">${l}<span class="n">${inBld.filter(r => match(r, k)).length}</span></button>`).join('')}</div>
+    ${shown.length ? `<div class="grid">${shown.map(plate).join('')}</div>` : `<div class="empty">ไม่มีห้องในกลุ่มนี้</div>`}`}`;
+}
+/* โหมดภาพรวม: ช่องเล็ก ๆ ต่อห้อง จัดเป็นแถวตามชั้น (ชั้นสูงสุดอยู่บน) แยกตามตึก — แดง = มีผู้เช่า, เขียว = ว่าง */
+function mapView(rs){
+  const occN = rs.filter(isOcc).length, groups = new Map();
+  rs.forEach(r => { const b = r.building || ''; if (!groups.has(b)) groups.set(b, []); groups.get(b).push(r); });
+  return `<p class="legend"><span><i class="sw occ"></i>มีผู้เช่า<b>${occN}</b></span><span><i class="sw free"></i>ว่าง<b>${rs.length - occN}</b></span><span>แตะช่องเพื่อดูห้อง</span></p>
+    <div class="omap">${[...groups.keys()].sort(natCmp).map(b => bldMap(b, groups.get(b))).join('')}</div>`;
+}
+function bldMap(b, rs){
+  const byFloor = new Map();
+  rs.forEach(r => { const f = String(r.floor || '').trim(); if (!byFloor.has(f)) byFloor.set(f, []); byFloor.get(f).push(r); });
+  const floors = [...byFloor.keys()].sort((x, y) => natCmp(y, x)), cols = Math.max(...[...byFloor.values()].map(a => a.length));
+  const pre = rs.map(r => (String(r.room).match(/^\D+/) || [''])[0]), pf = pre[0] && pre.every(x => x === pre[0]) ? pre[0] : '';
+  const tile = r => { const o = isOcc(r), id = String(r.room);
+    return `<button class="tile ${o ? 'occ' : 'free'}" data-room="${esc(id)}" title="${esc(id)} · ${o ? 'มีผู้เช่า' : 'ว่าง'}" aria-label="ห้อง ${esc(id)} ${o ? 'มีผู้เช่า' : 'ว่าง'}"><span>${pf ? `<span class="pf">${esc(pf)}</span>${esc(id.slice(pf.length))}` : esc(id)}</span></button>`; };
+  return `<section class="bmap" aria-label="${esc(b || 'ไม่ระบุตึก')}"><h3>${esc(b || 'ไม่ระบุตึก')} <small class="num">${rs.filter(isOcc).length}/${rs.length}</small></h3>
+    ${floors.map(f => `<div class="frow"><span class="fl num" aria-label="ชั้น ${esc(f || 'ไม่ระบุ')}">${esc(f || '–')}</span><div class="tiles" style="--cols:${cols}">${byFloor.get(f).sort((x, y) => natCmp(x.room, y.room)).map(tile).join('')}</div></div>`).join('')}</section>`;
 }
 function plate(r){
   const s = payStatus(r, ui.month, A.payments, A.bills), c = contractStatus(r);
@@ -696,6 +739,7 @@ document.addEventListener('click', e => {
   if (!A) return;
   if (d.tab) { ui.tab = d.tab; ui.rejectOpen = null; return renderAdmin(); }
   if (d.filter) { ui.filter = d.filter; return renderAdmin(); }
+  if (d.view) { ui.view = d.view === 'map' ? 'map' : 'detail'; lsSet('dormView', ui.view); return renderAdmin(); }
   if (d.slipf) { ui.slipFilter = d.slipf; return renderAdmin(); }
   if (d.room) return openRoom(d.room);
   if (d.act === 'newRoom') return openRoomForm(null);
