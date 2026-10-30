@@ -118,6 +118,15 @@ details.card{padding:10px 14px} details.card summary{cursor:pointer}
 .line-ok{color:var(--ok);font-size:12px}
 
 .list{display:flex;flex-direction:column;gap:10px}
+.lg-day{margin:16px 2px 6px;font-size:13px;font-weight:600;color:var(--muted)} #logList>.lg-day:first-child{margin-top:2px}
+.lg{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.lg-row{display:grid;grid-template-columns:42px minmax(0,1fr);gap:0 10px;padding:10px 12px 10px 9px;border-top:1px solid var(--line);border-left:3px solid transparent}
+.lg-row:first-child{border-top:0} .lg-row.sec{border-left-color:var(--crit);background:var(--crit-bg)}
+.lg-t{color:var(--muted);font-size:13px;padding-top:2px}
+.lg-h{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-width:0;overflow-wrap:anywhere} .lg-h .nm{font-weight:600}
+.lg-row.login .lg-h>span:not(.pill):not(.nm){color:var(--muted)}
+.lg-d{margin-top:2px;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.chip.lg-room{padding:0 9px;font-size:12.5px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px}
 .slip{display:grid;grid-template-columns:96px minmax(0,1fr);gap:12px}
 .thumb{width:96px;height:128px;border-radius:8px;background:var(--sunk);overflow:hidden;display:grid;place-items:center;color:var(--muted);font-size:12px;text-align:center;padding:4px;border:0;cursor:pointer}
@@ -202,7 +211,7 @@ const params = new URLSearchParams(location.search);
 let ME = null, A = null, T = null;     // me, adminData, tenantHome
 const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
-const ui = { tab: 'rooms', month: CUR, building: '', filter: 'all', slipFilter: 'pending', rejectOpen: null, panel: null, view: lsGet('dormView') === 'map' ? 'map' : 'detail' };
+const ui = { tab: 'rooms', month: CUR, building: '', filter: 'all', slipFilter: 'pending', rejectOpen: null, panel: null, view: lsGet('dormView') === 'map' ? 'map' : 'detail', log: { days: 7, who: '', kind: '', q: '', data: null, people: [], loading: false, err: '', seq: 0 } };
 const imgCache = {};
 
 /* ---------------- helpers ---------------- */
@@ -353,7 +362,7 @@ function renderAdmin(){
     </section>
     <nav class="tabs" role="tablist">
       ${tabBtn('rooms','ห้องพัก')}${tabBtn('bills','บิล')}${tabBtn('slips','ตรวจสลิป', ps ? `<span class="badge info">${ps}</span>` : '')}
-      ${tabBtn('issues','แจ้งซ่อม', oi ? `<span class="badge">${oi}</span>` : '')}${tabBtn('contracts','สัญญา', nearEnd ? `<span class="badge">${nearEnd}</span>` : '')}
+      ${tabBtn('issues','แจ้งซ่อม', oi ? `<span class="badge">${oi}</span>` : '')}${tabBtn('contracts','สัญญา', nearEnd ? `<span class="badge">${nearEnd}</span>` : '')}${tabBtn('log','ประวัติ')}
     </nav><div id="tabBody"></div>`;
   const b = $('#tabBody');
   if (ui.tab === 'rooms') b.innerHTML = roomsTab(rooms);
@@ -361,6 +370,7 @@ function renderAdmin(){
   if (ui.tab === 'slips') { b.innerHTML = slipsTab(); autoloadThumbs(); }
   if (ui.tab === 'issues') b.innerHTML = issuesTab();
   if (ui.tab === 'contracts') b.innerHTML = contractsTab(occ);
+  if (ui.tab === 'log') b.innerHTML = logTab();
   if (ui.panel && ui.panel.refresh) ui.panel.refresh();
 }
 const tabBtn = (id, label, extra = '') => `<button role="tab" data-tab="${id}" aria-selected="${ui.tab === id}">${label}${extra}</button>`;
@@ -508,6 +518,62 @@ function contractsTab(occ){
   return `<div class="tbl"><table><thead><tr><th>ห้อง</th><th>ผู้เช่า</th><th>เริ่ม</th><th>สิ้นสุด</th><th>สถานะ</th><th class="r">ค่าเช่า</th><th class="r">ประกัน</th></tr></thead><tbody>
     ${rs.map(r => { const c = contractStatus(r); return `<tr data-room="${esc(r.room)}" style="cursor:pointer"><td class="num">${esc(r.room)}</td><td>${esc(tenantOf(r))}</td><td>${esc(thDate(r.contractStart))}</td><td>${esc(thDate(r.contractEnd))}</td><td><span class="pill ${c.cls}">${esc(c.label)}</span></td><td class="r num">${baht(r.rent)}</td><td class="r num">${baht(r.deposit)}</td></tr>`; }).join('')}
   </tbody></table></div>`;
+}
+
+/* ---- ประวัติการใช้งาน (เฉพาะเจ้าของหอ) ---- */
+const LOG_ROLE = { owner: ['เจ้าของหอ', 'info'], tenant: ['ผู้เช่า', 'muted'], guest: ['ผู้ใช้ใหม่', 'warn'] };
+const opts = (list, cur) => list.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(cur) ? 'selected' : ''}>${esc(l)}</option>`).join('');
+function whoOptions(){ const L = ui.log; return opts([['', 'ทุกคน']].concat(L.people.map(p => [p.id, (p.name || 'ไม่ทราบชื่อ') + (p.role === 'owner' ? ' (เจ้าของหอ)' : p.room ? ' · ' + p.room : '')])), L.who); }
+function logTab(){
+  const L = ui.log;
+  return `<div class="toolbar">
+    <select class="in inline" style="flex:1 1 130px" id="lgDays" aria-label="ช่วงเวลา">${opts([[1, 'วันนี้'], [7, '7 วันล่าสุด'], [30, '30 วันล่าสุด'], [90, '90 วันล่าสุด'], [365, '12 เดือน']], L.days)}</select>
+    <select class="in inline" style="flex:1 1 130px" id="lgKind" aria-label="ประเภท">${opts([['', 'ทุกประเภท'], ['change', 'การแก้ไข'], ['login', 'การเข้าใช้งาน'], ['security', 'ความปลอดภัย']], L.kind)}</select>
+    <select class="in inline" style="flex:1 1 130px" id="lgWho" aria-label="ใคร">${whoOptions()}</select>
+    <input class="in" id="lgQ" type="search" enterkeyhint="search" placeholder="ค้นหา ห้อง / ชื่อ" value="${esc(L.q)}" style="flex:1 1 170px;width:auto" aria-label="ค้นหาในประวัติ">
+  </div><div id="logList">${logList()}</div>`;
+}
+function dayName(d){
+  const y = new Date(Date.parse(A.today + 'T00:00:00Z') - 864e5).toISOString().slice(0, 10);
+  return (d === A.today ? 'วันนี้ · ' : d === y ? 'เมื่อวาน · ' : '') + thDate(d);
+}
+function logRow(it){
+  const [rl, rc] = LOG_ROLE[it.role] || ['', 'muted'];
+  const room = !it.room ? '' : A.rooms.some(r => r.room === it.room) ? `<button class="chip lg-room num" data-room="${esc(it.room)}">${esc(it.room)}</button>` : `<span class="chip lg-room num" style="cursor:default">${esc(it.room)}</span>`;
+  return `<div class="lg-row ${it.kind === 'security' ? 'sec' : it.kind === 'login' ? 'login' : ''}"><span class="lg-t num">${esc(it.at.slice(11, 16))}</span><div>
+    <div class="lg-h"><span class="nm">${esc(it.name || 'ไม่ทราบชื่อ')}</span>${rl ? `<span class="pill sm ${rc}">${rl}</span>` : ''}${it.kind === 'security' ? '<span class="pill sm crit">ความปลอดภัย</span>' : ''}<span>${esc(it.action)}</span>${room}</div>
+    ${it.detail ? `<div class="lg-d">${esc(it.detail)}</div>` : ''}</div></div>`;
+}
+function logList(){
+  const L = ui.log;
+  if (L.err) return `<div class="empty"><p>${esc(L.err)}</p><button class="btn sm" data-act="logReload">ลองใหม่</button></div>`;
+  if (!L.data) return `<div class="empty">กำลังโหลดประวัติ…</div>`;
+  const note = `<p class="meta" style="margin:14px 2px 0">เก็บประวัติย้อนหลัง 12 เดือน · เริ่มบันทึกตั้งแต่เปิดใช้ฟีเจอร์นี้ (ก่อนหน้านั้นไม่มีข้อมูล) · ไม่เก็บเบอร์โทร รหัส หรือเนื้อหาข้อความ</p>`;
+  if (!L.data.items.length) return `<div class="empty">ไม่พบรายการ${L.who || L.kind || L.q ? 'ตามตัวกรองนี้' : 'ในช่วงนี้'}</div>${note}`;
+  let out = '', day = '';
+  L.data.items.forEach(it => {
+    const d = it.at.slice(0, 10);
+    if (d !== day) { if (day) out += '</div>'; day = d; out += `<div class="lg-day">${esc(dayName(d))}</div><div class="lg">`; }
+    out += logRow(it);
+  });
+  out += '</div>';
+  if (L.data.more) out += `<div style="text-align:center;margin-top:14px"><button class="btn" data-act="logMore" ${L.loading ? 'disabled' : ''}>ดูรายการเก่ากว่านี้</button></div>`;
+  return out + note;
+}
+function paintLog(){ const el = $('#logList'); if (!el || ui.tab !== 'log') return; el.innerHTML = logList(); const w = $('#lgWho'); if (w) w.innerHTML = whoOptions(); }
+async function loadLog(more){
+  const L = ui.log, seq = ++L.seq, prev = L.data;
+  L.loading = true; L.err = ''; if (!more) L.data = null; paintLog();
+  try {
+    const r = await api('listActivity', { days: L.days, who: L.who, kind: L.kind, q: L.q, before: more && prev ? prev.next : 0 });
+    if (seq !== L.seq) return;
+    L.people = r.people || L.people;
+    L.data = more && prev ? Object.assign(r, { items: prev.items.concat(r.items) }) : r;
+  } catch (e) {
+    if (seq !== L.seq) return;
+    L.err = (e && e.message) || 'โหลดประวัติไม่สำเร็จ'; if (more) L.data = prev;
+  }
+  L.loading = false; paintLog();
 }
 
 /* ---- panels ---- */
@@ -737,7 +803,7 @@ document.addEventListener('click', e => {
   if (d.close !== undefined) return closePanel();
   if (d.img) return showImg(d.img, t);
   if (!A) return;
-  if (d.tab) { ui.tab = d.tab; ui.rejectOpen = null; return renderAdmin(); }
+  if (d.tab) { ui.tab = d.tab; ui.rejectOpen = null; renderAdmin(); if (d.tab === 'log') loadLog(); return; }
   if (d.filter) { ui.filter = d.filter; return renderAdmin(); }
   if (d.view) { ui.view = d.view === 'map' ? 'map' : 'detail'; lsSet('dormView', ui.view); return renderAdmin(); }
   if (d.slipf) { ui.slipFilter = d.slipf; return renderAdmin(); }
@@ -748,6 +814,8 @@ document.addEventListener('click', e => {
   if (d.act === 'recordPay') return openRecordPay(d.no);
   if (d.act === 'openBill') return openBill(d.no);
   if (d.act === 'rates') return openRates();
+  if (d.act === 'logMore') return loadLog(true);
+  if (d.act === 'logReload') return loadLog();
   if (d.act === 'remind') return busy(t, async () => { await api('remind', { room: d.no, month: ui.month }); toast('ส่งแจ้งเตือนทาง LINE แล้ว'); });
   if (d.approve) return busy(t, async () => { await api('review', { id: d.approve, decision: 'approved' }); toast('ยืนยันแล้ว ผู้เช่าได้รับแจ้งทาง LINE'); await loadAdmin(); });
   if (d.reject) { ui.rejectOpen = d.reject; renderAdmin(); setTimeout(() => document.getElementById('rej-' + d.reject)?.focus(), 0); return; }
@@ -760,9 +828,11 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('change', e => {
   if (e.target.id === 'pfMonth' && ME) { const owner = ME.isAdmin, rm = owner ? A.rooms.find(x => x.room === ui.payRoom) : T.room, amt = $('#pfAmount'); if (rm && amt) amt.value = owedAmount(rm, e.target.value, owner ? A.payments : T.payments, owner ? A.bills : T.bills); }
+  const lg = { lgDays: 'days', lgKind: 'kind', lgWho: 'who', lgQ: 'q' }[e.target.id];
+  if (lg && A) { ui.log[lg] = lg === 'days' ? Number(e.target.value) : e.target.value.trim(); return loadLog(); }
   if (e.target.id === 'monthSel') { ui.month = e.target.value; renderAdmin(); } if (e.target.id === 'bldSel') { ui.building = e.target.value; renderAdmin(); } });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { const im = document.querySelector('.ov.img'); if (im) im.remove(); else closePanel(); } });
-$('#refresh').onclick = () => busy($('#refresh'), async () => { if (ME && ME.isAdmin) await loadAdmin(); else if (T) await loadTenant(); toast('อัปเดตแล้ว'); });
+$('#refresh').onclick = () => busy($('#refresh'), async () => { if (ME && ME.isAdmin) { await loadAdmin(); if (ui.tab === 'log') loadLog(); } else if (T) await loadTenant(); toast('อัปเดตแล้ว'); });
 let lastHidden = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { lastHidden = Date.now(); return; }
